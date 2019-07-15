@@ -38,6 +38,8 @@ def connect_command(debugger, command, result, internal_dict):
     for event in events:
         listener.AddEvent(event)
 
+import json
+
 def run_command(debugger, command, result, internal_dict):
     device_app = internal_dict['fruitstrap_device_app']
     args = command.split('--',1)
@@ -47,6 +49,11 @@ def run_command(debugger, command, result, internal_dict):
     if len(args) > 1:
         args_arr = shlex.split(args[1])
     args_arr = args_arr + shlex.split('{args}')
+    arr = []
+    for x in args_arr:
+      print(repr(x))
+      arr += [json.loads(x)]
+    args_arr = [x for x in arr]
 
     launchInfo = lldb.SBLaunchInfo(args_arr)
     global listener
@@ -97,7 +104,8 @@ def autoexit_command(debugger, command, result, internal_dict):
     def ProcessSTDOUT():
         stdout = process.GetSTDOUT(1024)
         while stdout:
-            sys.stdout.write(stdout)
+            #sys.stdout.write(stdout)
+            sys.stderr.write(stdout)
             stdout = process.GetSTDOUT(1024)
 
     def ProcessSTDERR():

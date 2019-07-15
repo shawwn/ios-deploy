@@ -20,7 +20,12 @@
 #import "device_db.h"
 
 #define PREP_CMDS_PATH @"/tmp/%@/fruitstrap-lldb-prep-cmds-"
+#define PREP_CMDS2_PATH @"/tmp/%@/fruitstrap-lldb-prep-cmds2-"
 #define LLDB_SHELL @"lldb -s %@"
+
+#define LLDB_PREP_CMDS2 CFSTR("\
+    command source -s true {source_path}\n\
+")
 /*
  * Startup script passed to lldb.
  * To see how xcode interacts with lldb, put this into .lldbinit:
@@ -44,16 +49,16 @@
 const char* lldb_prep_no_cmds = "";
 
 const char* lldb_prep_interactive_cmds = "\
-    run\n\
+    run -- {args}\n\
 ";
 
 const char* lldb_prep_noninteractive_justlaunch_cmds = "\
-    run\n\
+    run -- {args}\n\
     safequit\n\
 ";
 
 const char* lldb_prep_noninteractive_cmds = "\
-    run\n\
+    run -- {args}\n\
     autoexit\n\
 ";
 
@@ -66,6 +71,9 @@ NSString* LLDB_FRUITSTRAP_MODULE = @
     #include "lldb.py.h"
 ;
 
+
+int g_argc;
+char** g_argv;
 
 typedef struct am_device * AMDeviceRef;
 mach_error_t AMDeviceSecureStartService(struct am_device *device, CFStringRef service_name, unsigned int *unknown, service_conn_t *handle);
@@ -129,6 +137,7 @@ void on_error(NSString* format, ...)
 
     NSLog(@"[ !! ] %@", str);
 
+    //__builtin_trap();
     exit(exitcode_error);
 }
 
@@ -152,7 +161,7 @@ void __NSLogOut(NSString* format, va_list valist) {
 void NSLogOut(NSString* format, ...) {
     va_list valist;
     va_start(valist, format);
-    __NSLogOut(format, valist);
+//    __NSLogOut(format, valist);
     va_end(valist);
 }
 
@@ -672,6 +681,8 @@ void write_lldb_prep_cmds(AMDeviceRef device, CFURLRef disk_app_url) {
 
     CFStringRef bundle_identifier = copy_disk_app_identifier(disk_app_url);
     CFURLRef device_app_url = copy_device_app_url(device, bundle_identifier);
+    CFURLRef device_app_url_up = CFURLCreateCopyDeletingLastPathComponent(NULL, device_app_url);
+    CFStringRef device_app_id = CFURLCopyLastPathComponent(device_app_url_up);
     CFStringRef device_app_path = CFURLCopyFileSystemPath(device_app_url, kCFURLPOSIXPathStyle);
     CFStringFindAndReplace(cmds, CFSTR("{device_app}"), device_app_path, range, 0);
     range.length = CFStringGetLength(cmds);
@@ -725,6 +736,10 @@ void write_lldb_prep_cmds(AMDeviceRef device, CFURLRef disk_app_url) {
     }
     FILE *out = fopen([prep_cmds_path UTF8String], "w");
     fwrite(CFDataGetBytePtr(cmds_data), CFDataGetLength(cmds_data), 1, out);
+    
+    // TODO: change working dir?
+    // platform settings -w {device_container}/Documents
+    
     // Write additional commands based on mode we're running in
     const char* extra_cmds;
     if (!interactive)
@@ -738,7 +753,91 @@ void write_lldb_prep_cmds(AMDeviceRef device, CFURLRef disk_app_url) {
         extra_cmds = lldb_prep_no_cmds;
     else
         extra_cmds = lldb_prep_interactive_cmds;
+#if 0
     fwrite(extra_cmds, strlen(extra_cmds), 1, out);
+#else
+    CFMutableStringRef extra_cmds_str = CFStringCreateMutableCopy(NULL, 0, CFStringCreateWithCString(NULL, extra_cmds, kCFStringEncodingUTF8));
+    range.length = CFStringGetLength(extra_cmds_str);
+    
+    CFStringRef tmpUUIDStr = CFStringCreateWithCString(NULL, [tmpUUID UTF8String], kCFStringEncodingUTF8);
+    
+    CFStringRef path = CFStringCreateWithCString(NULL, app_path, kCFStringEncodingUTF8);
+    CFURLRef relative_url = CFURLCreateWithFileSystemPath(NULL, path, kCFURLPOSIXPathStyle, false);
+    CFURLRef url = CFURLCopyAbsoluteURL(relative_url);
+
+    CFMutableStringRef argv = CFStringCreateMutable(kCFAllocatorDefault, 0);
+    for (int i = optind; i < g_argc; i++) {
+      if (i > 0) {
+        CFStringAppendFormat(argv, NULL, CFSTR(" "));
+      }
+      CFStringRef arg = CFStringCreateWithCString(NULL, g_argv[i], kCFStringEncodingUTF8);
+      CFMutableStringRef res = CFStringCreateMutable(kCFAllocatorDefault, 0);
+      CFStringAppendFormat(res, NULL, CFSTR("%@"), arg);
+      CFRange range = { 0, CFStringGetLength(res) };
+      
+      CFStringFindAndReplace(res, CFSTR("{bundle_identifier}"), bundle_identifier, range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("{disk_container}"), disk_container_path, range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("{device_container}"), dcp_noprivate, range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("{device_app}"), device_app_path, range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("{device_app_id}"), device_app_id, range, 0);
+      range.length = CFStringGetLength(res);
+#if 1
+      CFStringFindAndReplace(res, CFSTR("\\"), CFSTR("\\\\"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("\0"), CFSTR("\\0"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("\b"), CFSTR("\\b"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("\t"), CFSTR("\\t"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("\n"), CFSTR("\\n"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("\f"), CFSTR("\\f"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("\r"), CFSTR("\\r"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("\""), CFSTR("\\\""), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("`"), CFSTR("\\`"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("'"), CFSTR("'\\''"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringAppendFormat(argv, NULL, CFSTR("'\"%@\"'"), res);
+#else
+      CFStringFindAndReplace(res, CFSTR("'"), CFSTR("'\\''"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringFindAndReplace(res, CFSTR("`"), CFSTR("\\`"), range, 0);
+      range.length = CFStringGetLength(res);
+      CFStringAppendFormat(argv, NULL, CFSTR("'%@'"), res);
+#endif
+    }
+    CFStringFindAndReplace(extra_cmds_str, CFSTR("{args}"), argv, range, 0);
+    range.length = CFStringGetLength(extra_cmds_str);
+    CFDataRef extra_cmds_data = CFStringCreateExternalRepresentation(NULL, extra_cmds_str, kCFStringEncodingUTF8, 0);
+    fwrite(CFDataGetBytePtr(extra_cmds_data), CFDataGetLength(extra_cmds_data), 1, out);
+#endif
+    fclose(out);
+
+    CFMutableStringRef cmds2 = CFStringCreateMutableCopy(NULL, 0, LLDB_PREP_CMDS2);
+    CFRange range2 = { 0, CFStringGetLength(cmds2) };
+    
+    CFStringRef cf_prep_cmds_path = CFStringCreateWithFormat(NULL, NULL, CFSTR("%s"), [prep_cmds_path UTF8String]);
+//    CFStringFindAndReplace(pmodule, CFSTR("{detect_deadlock_timeout}"), cf_prep_cmds_path, rangeLLDB, 0);
+//    rangeLLDB.length = CFStringGetLength(pmodule);
+    
+    CFStringFindAndReplace(cmds2, CFSTR("{source_path}"), cf_prep_cmds_path, range2, 0);
+    range2.length = CFStringGetLength(cmds2);
+    CFDataRef cmds2_data = CFStringCreateExternalRepresentation(NULL, cmds2, kCFStringEncodingUTF8, 0);
+    NSString* prep_cmds2_path = [NSString stringWithFormat:PREP_CMDS2_PATH, tmpUUID];
+    if(device_id != NULL) {
+        prep_cmds2_path = [prep_cmds2_path stringByAppendingString:[[NSString stringWithUTF8String:device_id] stringByReplacingOccurrencesOfString:@"-" withString:@"_"]];
+    }
+    out = fopen([prep_cmds2_path UTF8String], "w");
+    fwrite(CFDataGetBytePtr(cmds2_data), CFDataGetLength(cmds2_data), 1, out);
     fclose(out);
 
     CFDataRef pmodule_data = CFStringCreateExternalRepresentation(NULL, pmodule, kCFStringEncodingUTF8, 0);
@@ -747,6 +846,8 @@ void write_lldb_prep_cmds(AMDeviceRef device, CFURLRef disk_app_url) {
     fwrite(CFDataGetBytePtr(pmodule_data), CFDataGetLength(pmodule_data), 1, out);
     fclose(out);
 
+    CFRelease(cf_prep_cmds_path);
+    CFRelease(cmds2);
     CFRelease(cmds);
     CFRelease(symbols_path);
     CFRelease(bundle_identifier);
@@ -758,6 +859,7 @@ void write_lldb_prep_cmds(AMDeviceRef device, CFURLRef disk_app_url) {
     CFRelease(dcp_noprivate);
     CFRelease(disk_container_url);
     CFRelease(disk_container_path);
+    CFRelease(cmds2_data);
     CFRelease(cmds_data);
 }
 
@@ -885,8 +987,18 @@ int kill_ptree(pid_t root, int signum) {
     free(kp);
     return 0;
 }
+void freak(const char* msg, ...) {
+    va_list arg;
+    va_start(arg, msg);
+    vfprintf(stderr, msg, arg);
+    fflush(stderr);
+    va_end(arg);
+    //__builtin_trap();
+    exit(1);
+}
 
 void killed(int signum) {
+    freak("killed %d\n", signum);
     // SIGKILL needed to kill lldb, probably a better way to do this.
     kill(0, SIGKILL);
     _exit(0);
@@ -894,27 +1006,35 @@ void killed(int signum) {
 
 void lldb_finished_handler(int signum)
 {
+    //freak("finished %d\n", signum);
     int status = 0;
     if (waitpid(child, &status, 0) == -1)
-        perror("waitpid failed");
+        freak("waitpid failed");
     _exit(WEXITSTATUS(status));
 }
 
 void bring_process_to_foreground() {
+#if 0
+printf("BRING PROCESS TO FOREGROUND NOW\n");
+sleep(5);
+printf("YOU HAVE 5 SECONDS\n");
+sleep(5);
+#else
     if (setpgid(0, 0) == -1)
-        perror("setpgid failed");
+        freak("setpgid failed");
 
     signal(SIGTTOU, SIG_IGN);
     if (tcsetpgrp(STDIN_FILENO, getpid()) == -1)
-        perror("tcsetpgrp failed");
+        freak("tcsetpgrp failed");
     signal(SIGTTOU, SIG_DFL);
+#endif
 }
 
 void setup_dummy_pipe_on_stdin(int pfd[2]) {
     if (pipe(pfd) == -1)
-        perror("pipe failed");
+        freak("pipe failed");
     if (dup2(pfd[0], STDIN_FILENO) == -1)
-        perror("dup2 failed");
+        freak("dup2 failed");
 }
 
 void setup_lldb(AMDeviceRef device, CFURLRef url) {
@@ -931,7 +1051,7 @@ void setup_lldb(AMDeviceRef device, CFURLRef url) {
     if(AMDeviceGetInterfaceType(device) == 2)
     {
         NSLogOut(@"Cannot debug %@ over %@.", device_full_name, device_interface_name);
-        exit(0);
+        freak("Cannot debug device");
     }
 
     NSLogOut(@"Starting debug of %@ connected through %@...", device_full_name, device_interface_name);
@@ -982,6 +1102,9 @@ void launch_debugger(AMDeviceRef device, CFURLRef url) {
         if(device_id != NULL) {
             lldb_shell = [lldb_shell stringByAppendingString: [[NSString stringWithUTF8String:device_id] stringByReplacingOccurrencesOfString:@"-" withString:@"_"]];
         }
+        
+        // swap stderr and stdout https://stackoverflow.com/questions/13299317/io-redirection-swapping-stdout-and-stderr
+        lldb_shell = [lldb_shell stringByAppendingString:@"  3>&2 2>&1 1>&3"];
 
         int status = system([lldb_shell UTF8String]); // launch lldb
         if (status == -1)
@@ -1021,6 +1144,9 @@ void launch_debugger_and_exit(AMDeviceRef device, CFURLRef url) {
         if(device_id != NULL) {
             lldb_shell = [lldb_shell stringByAppendingString:[[NSString stringWithUTF8String:device_id] stringByReplacingOccurrencesOfString:@"-" withString:@"_"]];
         }
+
+        // swap stderr and stdout https://stackoverflow.com/questions/13299317/io-redirection-swapping-stdout-and-stderr
+        lldb_shell = [lldb_shell stringByAppendingString:@"  3>&2 2>&1 1>&3"];
 
         int status = system([lldb_shell UTF8String]); // launch lldb
         if (status == -1)
@@ -1782,6 +1908,8 @@ void show_version() {
 }
 
 int main(int argc, char *argv[]) {
+    g_argc = argc;
+    g_argv = argv;
 
     // create a UUID for tmp purposes
     CFUUIDRef uuid = CFUUIDCreate(NULL);
