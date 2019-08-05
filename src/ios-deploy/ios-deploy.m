@@ -161,7 +161,7 @@ void __NSLogOut(NSString* format, va_list valist) {
 void NSLogOut(NSString* format, ...) {
     va_list valist;
     va_start(valist, format);
-//    __NSLogOut(format, valist);
+    __NSLogOut(format, valist);
     va_end(valist);
 }
 
